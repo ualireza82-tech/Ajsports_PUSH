@@ -1,0 +1,15 @@
+{
+    "inbounds": [{
+        "port": 10000,
+        "protocol": "vless",
+        "settings": {
+            "clients": [{"id": "UUID_HERE"}],
+            "decryption": "none"
+        },
+        "streamSettings": {
+            "network": "ws",
+            "wsSettings": {"path": "/express-api"}
+        }
+    }],
+    "outbounds": [{"protocol": "freedom"}]
+}
