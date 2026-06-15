@@ -1,0 +1,28 @@
+{
+  "functions": {
+    "api/**/*.js": {
+      "memory": 512,
+      "maxDuration": 10
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/matches",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "s-maxage=15, stale-while-revalidate=30"
+        }
+      ]
+    },
+    {
+      "source": "/api/static/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "s-maxage=3600, stale-while-revalidate=86400"
+        }
+      ]
+    }
+  ]
+}
