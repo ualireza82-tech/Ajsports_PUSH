@@ -11,7 +11,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // 🎯 POST: ادمین مسابقات رو ذخیره می‌کنه
+  // 🎯 POST: ادمین ذخیره می‌کنه - دائمی
   if (req.method === 'POST') {
     const token = req.headers['admin-token'];
     const ADMIN_SECRET = process.env.ADMIN_SECRET || 'Aj2024Secure#';
@@ -22,27 +22,31 @@ export default async function handler(req, res) {
 
     const { matches } = req.body;
     if (matches && Array.isArray(matches)) {
-      await redis.set('live_matches', JSON.stringify(matches), { ex: 60 });
-      return res.json({ success: true, message: '✅ ذخیره شد - ۵ ثانیه دیگه روی سایت میاد' });
+      // 🔴 بدون EXPIRE - دائمی می‌مونه
+      await redis.set('live_matches', JSON.stringify(matches));
+      return res.json({ success: true, message: '✅ دائمی ذخیره شد' });
     }
     return res.status(400).json({ error: 'Invalid matches' });
   }
 
-  // 📡 GET: کاربرا مسابقات رو می‌گیرن
+  // 📡 GET: کاربرا و ادمین می‌گیرن
   try {
-    // اول Redis
+    // اول Redis - دائمی
     const cached = await redis.get('live_matches');
     if (cached) {
-      return res.json(typeof cached === 'string' ? JSON.parse(cached) : cached);
+      const matches = typeof cached === 'string' ? JSON.parse(cached) : cached;
+      if (matches && matches.length > 0) {
+        return res.json(matches);
+      }
     }
 
-    // بعد منبع اصلی
+    // اگه Redis خالی بود از منبع بگیر
     const response = await fetch('https://news-et1s.onrender.com/api/matches', { timeout: 5000 });
     if (response.ok) {
       const rawData = await response.json();
       const matches = Array.isArray(rawData) ? rawData : (rawData.matches || rawData.data || []);
       if (matches.length > 0) {
-        await redis.set('live_matches', JSON.stringify(matches), { ex: 60 });
+        await redis.set('live_matches', JSON.stringify(matches));
         return res.json(matches);
       }
     }
@@ -50,6 +54,7 @@ export default async function handler(req, res) {
     console.error('Error:', e.message);
   }
 
+  // فقط دفعه اول که Redis کاملاً خالیه
   return res.json([{
     id: '1',
     title: 'مسابقه تست AJ SPORTS',
@@ -59,4 +64,4 @@ export default async function handler(req, res) {
     stream: null,
     match_id: null
   }]);
-  }
+                      }
