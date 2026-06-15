@@ -1,19 +1,13 @@
 {
-  "name": "aj-sports-server",
+  "name": "aj-sports-api",
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
-    "build": "node build.js",
-    "dev": "node server.js"
-  },
   "dependencies": {
-    "@vercel/kv": "^1.0.1",
-    "@vercel/edge-config": "^0.4.1",
     "cors": "^2.8.5",
-    "express": "^4.18.2",
+    "express": "^4.21.0",
     "node-fetch": "^3.3.2"
   },
   "engines": {
-    "node": "18.x"
+    "node": "22.x"
   }
 }
