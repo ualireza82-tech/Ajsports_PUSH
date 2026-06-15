@@ -1,26 +1,30 @@
 {
+  "version": 2,
   "functions": {
     "api/**/*.js": {
       "memory": 512,
-      "maxDuration": 10
+      "maxDuration": 10,
+      "runtime": "nodejs22.x"
     }
   },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" }
+  ],
   "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, admin-token" }
+      ]
+    },
     {
       "source": "/api/matches",
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "s-maxage=15, stale-while-revalidate=30"
-        }
-      ]
-    },
-    {
-      "source": "/api/static/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "s-maxage=3600, stale-while-revalidate=86400"
+          "value": "public, s-maxage=15, stale-while-revalidate=30, stale-if-error=300"
         }
       ]
     }
