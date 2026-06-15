@@ -1,221 +1,201 @@
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
-import { createClient } from '@vercel/kv';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// Vercel KV client (برای دیتابیس رایگان)
-let kv = null;
-try {
-  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-    kv = createClient({
-      url: process.env.KV_REST_API_URL,
-      token: process.env.KV_REST_API_TOKEN,
-    });
-  }
-} catch (e) {
-  console.log('KV not available, using in-memory cache');
-}
-
-// این-مموری کش با TTL برای Fallback
+// این-مموری کش برای ۱۰ میلیون کاربر
 const memoryCache = new Map();
 const CACHE_TTL = {
   matches: 15000,      // 15 ثانیه
-  static: 3600000,     // 1 ساعت
+  football: 30000,     // 30 ثانیه
+  chat: 3600000        // 1 ساعت
 };
 
 function setCache(key, value, ttl = 15000) {
   const expires = Date.now() + ttl;
-  memoryCache.set(key, { value, expires });
-  
-  // تلاش برای ذخیره در KV هم
-  if (kv) {
-    try {
-      kv.set(key, JSON.stringify(value), { ex: Math.floor(ttl / 1000) });
-    } catch (e) {}
-  }
+  memoryCache.set(key, { value: JSON.parse(JSON.stringify(value)), expires });
 }
 
 async function getCache(key) {
-  // اول چک مموری کش
   const memData = memoryCache.get(key);
   if (memData && memData.expires > Date.now()) {
     return memData.value;
   }
-  
-  // بعد چک KV
-  if (kv) {
-    try {
-      const kvData = await kv.get(key);
-      if (kvData) {
-        const parsed = JSON.parse(kvData);
-        memoryCache.set(key, { value: parsed, expires: Date.now() + 30000 });
-        return parsed;
-      }
-    } catch (e) {}
-  }
-  
   return null;
 }
 
-// Middleware
-app.use(cors());
+// CORS برای فرانت‌اند خارجی
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'admin-token']
+}));
 app.use(express.json());
 
-// 🎯 API Endpoint اصلی - با کش لبه
+// 🎯 API اصلی مسابقات
 app.get('/api/matches', async (req, res) => {
   try {
     const cacheKey = 'live_matches';
     let matches = await getCache(cacheKey);
     
     if (!matches) {
-      // فچ از منبع اصلی
-      const response = await fetch('https://news-et1s.onrender.com/api/matches');
-      if (response.ok) {
-        matches = await response.json();
-        setCache(cacheKey, matches, CACHE_TTL.matches);
+      console.log('🔄 Cache MISS - Fetching from source');
+      try {
+        const response = await fetch('https://news-et1s.onrender.com/api/matches', {
+          timeout: 5000,
+          headers: { 'Accept': 'application/json' }
+        });
+        
+        if (response.ok) {
+          const rawData = await response.json();
+          matches = Array.isArray(rawData) ? rawData : (rawData.matches || rawData.data || []);
+          setCache(cacheKey, matches, CACHE_TTL.matches);
+          console.log('✅ Matches fetched and cached');
+        }
+      } catch (fetchError) {
+        console.error('Source fetch error:', fetchError.message);
       }
     }
     
-    if (!matches) {
-      // Fallback data
-      matches = [
-        {
-          id: 'match_1',
-          title: 'بارگذاری مجدد...',
-          time: 'به‌زودی',
-          status: 'upcoming',
-          poster: 'https://via.placeholder.com/400x225?text=AJ+SPORTS',
-          stream: null,
-          match_id: null
-        }
-      ];
+    if (!matches || matches.length === 0) {
+      matches = [{
+        id: 'fallback',
+        title: 'در حال بارگذاری مسابقات...',
+        time: 'به‌زودی',
+        status: 'upcoming',
+        poster: 'https://via.placeholder.com/400x225?text=AJ+SPORTS',
+        stream: null,
+        match_id: null
+      }];
     }
     
-    // هدرهای کش قدرتمند
     res.setHeader('Cache-Control', 'public, s-maxage=15, stale-while-revalidate=30, stale-if-error=300');
-    res.setHeader('Surrogate-Control', 'max-age=15, stale-while-revalidate=30');
-    res.setHeader('CDN-Cache-Control', 'max-age=15');
+    res.setHeader('X-Cache', matches[0]?.id !== 'fallback' ? 'HIT' : 'MISS');
     res.json(matches);
     
   } catch (error) {
-    res.status(500).json({ error: 'Server Error', cached: true });
+    console.error('API Error:', error.message);
+    res.status(200).json([{
+      id: 'error_fallback',
+      title: 'خطا - لطفاً بروزرسانی کنید',
+      time: '---',
+      status: 'upcoming',
+      poster: 'https://via.placeholder.com/400x225?text=Error',
+      stream: null,
+      match_id: null
+    }]);
   }
 });
 
-// 🔄 API برای SSE چت
+// 🔄 SSE چت
 app.get('/api/chat/events', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': '*',
+    'X-Accel-Buffering': 'no'
   });
 
   const matchId = req.query.match_id || 'global';
   
-  // ارسال heartbeat هر 30 ثانیه
+  // Heartbeat هر ۳۰ ثانیه
   const heartbeat = setInterval(() => {
     res.write(`: heartbeat ${Date.now()}\n\n`);
   }, 30000);
 
-  // ارسال آخرین پیام‌ها
-  const sendCachedMessages = async () => {
-    const messages = await getCache(`chat_${matchId}`) || [];
-    messages.forEach(msg => {
-      res.write(`data: ${JSON.stringify({ type: 'message', payload: msg })}\n\n`);
-    });
-  };
-  
-  sendCachedMessages();
+  // ارسال پیام‌های کش شده
+  getCache(`chat_${matchId}`).then(messages => {
+    if (messages && Array.isArray(messages)) {
+      messages.forEach(msg => {
+        res.write(`data: ${JSON.stringify({ type: 'message', payload: msg })}\n\n`);
+      });
+    }
+  });
 
   req.on('close', () => {
     clearInterval(heartbeat);
   });
 });
 
-// 📨 API برای ارسال پیام چت
+// 📨 ارسال پیام چت
 app.post('/api/chat/send', async (req, res) => {
   try {
     const { text, email, avatar, reply_text, match_id } = req.body;
-    const matchId = match_id || 'global';
     
+    if (!text || !email) {
+      return res.status(400).json({ error: 'Missing fields' });
+    }
+    
+    const matchId = match_id || 'global';
     const message = {
-      id: Date.now().toString(36),
-      text,
-      sender: email,
+      id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+      text: text.substring(0, 500),
+      sender: email.split('@')[0],
       sender_identity_id: email,
       avatar: avatar || '',
-      reply_text: reply_text || null,
+      reply_text: reply_text ? reply_text.substring(0, 200) : null,
       match_id: matchId,
       timestamp: Date.now()
     };
     
-    // ذخیره در کش
     const cacheKey = `chat_${matchId}`;
-    let messages = await getCache(cacheKey) || [];
+    let messages = (await getCache(cacheKey)) || [];
     messages.unshift(message);
-    messages = messages.slice(0, 100); // نگه داشتن 100 پیام آخر
-    setCache(cacheKey, messages, 3600000); // 1 ساعت
+    messages = messages.slice(0, 100);
+    setCache(cacheKey, messages, CACHE_TTL.chat);
     
     res.json({ success: true, message });
   } catch (error) {
-    res.status(500).json({ error: 'Send Failed' });
+    res.status(500).json({ error: 'Send failed' });
   }
 });
 
-// 🔐 API برای احراز هویت ساده
-app.post('/api/auth/send-otp', async (req, res) => {
-  // این اندپوینت می‌تواند با Supabase کار کند
-  res.json({ success: true, message: 'OTP sent' });
-});
-
-// 📊 API برای دیتای فوتبال (با کش)
+// 📊 API فوتبال (پروکسی با کش)
 app.get('/api/football/:action', async (req, res) => {
-  const { action } = req.params;
-  const queryParams = new URLSearchParams(req.query).toString();
-  const cacheKey = `football_${action}_${queryParams}`;
-  
-  let data = await getCache(cacheKey);
-  
-  if (!data) {
-    try {
-      const response = await fetch(
-        `https://apiv3.apifootball.com/?action=${action}&${queryParams}&APIkey=${process.env.API_KEY_FOOTBALL || ''}`
-      );
+  try {
+    const { action } = req.params;
+    const queryParams = new URLSearchParams(req.query).toString();
+    const cacheKey = `football_${action}_${queryParams}`;
+    
+    let data = await getCache(cacheKey);
+    
+    if (!data) {
+      const apiKey = process.env.API_KEY_FOOTBALL || '';
+      const url = `https://apiv3.apifootball.com/?action=${action}&${queryParams}&APIkey=${apiKey}`;
+      
+      const response = await fetch(url, { timeout: 5000 });
       data = await response.json();
-      setCache(cacheKey, data, 30000); // 30 ثانیه
-    } catch (e) {
-      data = { error: 'API unavailable' };
+      setCache(cacheKey, data, CACHE_TTL.football);
     }
+    
+    res.setHeader('Cache-Control', 'public, s-maxage=30');
+    res.json(data);
+  } catch (error) {
+    res.status(200).json({ error: 'API unavailable' });
   }
-  
-  res.setHeader('Cache-Control', 'public, s-maxage=30');
-  res.json(data);
 });
 
-// 🎛️ API های ادمین
+// 🎛️ پنل ادمین
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin123';
 
-// Middleware احراز هویت ادمین
 function adminAuth(req, res, next) {
-  const token = req.headers['admin-token'] || req.query.token;
+  const token = req.headers['admin-token'] || req.query.token || (req.body && req.body.token);
   if (token === ADMIN_SECRET) {
     next();
   } else {
-    res.status(401).json({ error: 'Unauthorized' });
+    res.status(401).json({ error: 'Unauthorized - توکن نامعتبر' });
   }
 }
 
-// دریافت تمام مسابقات (ادمین)
+// دریافت مسابقات
 app.get('/api/admin/matches', adminAuth, async (req, res) => {
   const matches = await getCache('live_matches') || [];
   res.json(matches);
 });
 
-// به‌روزرسانی مسابقات (ادمین)
+// به‌روزرسانی مسابقات
 app.post('/api/admin/matches', adminAuth, async (req, res) => {
   const { matches } = req.body;
   
@@ -223,7 +203,6 @@ app.post('/api/admin/matches', adminAuth, async (req, res) => {
     return res.status(400).json({ error: 'Matches must be an array' });
   }
   
-  // اعتبارسنجی هر مسابقه
   const validMatches = matches.map((match, index) => ({
     id: match.id || `match_${Date.now()}_${index}`,
     title: match.title || 'مسابقه',
@@ -231,8 +210,7 @@ app.post('/api/admin/matches', adminAuth, async (req, res) => {
     status: match.status || 'upcoming',
     poster: match.poster || 'https://via.placeholder.com/400x225?text=Match',
     stream: match.stream || null,
-    match_id: match.match_id || null,
-    matchData: match.matchData || null
+    match_id: match.match_id || null
   }));
   
   setCache('live_matches', validMatches, CACHE_TTL.matches);
@@ -240,18 +218,24 @@ app.post('/api/admin/matches', adminAuth, async (req, res) => {
   res.json({ 
     success: true, 
     matches: validMatches,
-    message: 'مسابقات با موفقیت به‌روزرسانی شد'
+    message: '✅ مسابقات بروزرسانی شد'
   });
 });
 
-// کنترل پخش (ادمین)
+// کنترل پخش
 app.post('/api/admin/stream-control', adminAuth, async (req, res) => {
   const { matchId, action, streamUrl, posterUrl } = req.body;
+  
+  // پاکسازی کش
+  if (action === 'clear-cache') {
+    memoryCache.clear();
+    return res.json({ success: true, message: '🧹 کش پاکسازی شد' });
+  }
   
   let matches = await getCache('live_matches') || [];
   const matchIndex = matches.findIndex(m => m.id === matchId);
   
-  if (matchIndex === -1) {
+  if (matchIndex === -1 && action !== 'add') {
     return res.status(404).json({ error: 'Match not found' });
   }
   
@@ -259,7 +243,6 @@ app.post('/api/admin/stream-control', adminAuth, async (req, res) => {
     case 'play':
       matches[matchIndex].status = 'live';
       if (streamUrl) matches[matchIndex].stream = streamUrl;
-      if (posterUrl) matches[matchIndex].poster = posterUrl;
       break;
     case 'pause':
       matches[matchIndex].status = 'paused';
@@ -275,6 +258,17 @@ app.post('/api/admin/stream-control', adminAuth, async (req, res) => {
     case 'delete':
       matches.splice(matchIndex, 1);
       break;
+    case 'add':
+      matches.push({
+        id: `match_${Date.now()}`,
+        title: req.body.title || 'مسابقه جدید',
+        time: req.body.time || 'نامشخص',
+        status: 'upcoming',
+        poster: posterUrl || '',
+        stream: streamUrl || null,
+        match_id: matchId || null
+      });
+      break;
     default:
       return res.status(400).json({ error: 'Invalid action' });
   }
@@ -284,31 +278,35 @@ app.post('/api/admin/stream-control', adminAuth, async (req, res) => {
   res.json({ 
     success: true, 
     matches,
-    action: `Action '${action}' applied to match ${matchId}`
+    action: `✅ ${action} روی مسابقه ${matchId || 'جدید'} اجرا شد`
   });
 });
 
-// روت اصلی
-app.get('/', (req, res) => {
+// صفحه اصلی API
+app.get('/api', (req, res) => {
+  const cacheSize = memoryCache.size;
+  const matchCount = memoryCache.get('live_matches')?.value?.length || 0;
+  
   res.json({ 
-    status: 'AJ SPORTS API is running',
-    version: '2.0',
+    status: '🚀 AJ SPORTS API v2.0',
+    uptime: process.uptime(),
+    cache: {
+      entries: cacheSize,
+      matches: matchCount
+    },
     endpoints: {
       matches: '/api/matches',
       chat: '/api/chat/send',
+      chatEvents: '/api/chat/events',
+      football: '/api/football/:action',
       admin: '/api/admin/matches'
     }
   });
 });
 
-// Export for Vercel
-export default app;
+// 404
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
 
-// برای اجرای لوکال
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`🚀 AJ SPORTS Server running on port ${PORT}`);
-    console.log(`📡 API: http://localhost:${PORT}/api/matches`);
-    console.log(`🎛️ Admin: http://localhost:${PORT}/api/admin/matches?token=admin123`);
-  });
-}
+export default app;
