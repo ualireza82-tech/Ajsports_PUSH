@@ -1,12 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/**/*.js": {
-      "memory": 512,
-      "maxDuration": 10,
-      "runtime": "nodejs22.x"
-    }
-  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
@@ -24,7 +17,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, s-maxage=15, stale-while-revalidate=30, stale-if-error=300"
+          "value": "public, s-maxage=15, stale-while-revalidate=30"
         }
       ]
     }
