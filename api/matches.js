@@ -7,11 +7,11 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, admin-token');
-  res.setHeader('Cache-Control', 'public, s-maxage=5, stale-while-revalidate=10');
+  res.setHeader('Cache-Control', 'public, s-maxage=3, stale-while-revalidate=5');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // 🎯 POST: ادمین ذخیره می‌کنه - دائمی
+  // 🎯 POST: ادمین کل matches رو ذخیره می‌کنه
   if (req.method === 'POST') {
     const token = req.headers['admin-token'];
     const ADMIN_SECRET = process.env.ADMIN_SECRET || 'Aj2024Secure#';
@@ -22,16 +22,16 @@ export default async function handler(req, res) {
 
     const { matches } = req.body;
     if (matches && Array.isArray(matches)) {
-      // 🔴 بدون EXPIRE - دائمی می‌مونه
+      // 🔴 ذخیره دائمی بدون expire
       await redis.set('live_matches', JSON.stringify(matches));
-      return res.json({ success: true, message: '✅ دائمی ذخیره شد' });
+      console.log('✅ Admin saved ' + matches.length + ' matches');
+      return res.json({ success: true, count: matches.length });
     }
     return res.status(400).json({ error: 'Invalid matches' });
   }
 
-  // 📡 GET: کاربرا و ادمین می‌گیرن
+  // 📡 GET: همه matches رو برمی‌گردونه
   try {
-    // اول Redis - دائمی
     const cached = await redis.get('live_matches');
     if (cached) {
       const matches = typeof cached === 'string' ? JSON.parse(cached) : cached;
@@ -40,7 +40,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // اگه Redis خالی بود از منبع بگیر
+    // Fallback
     const response = await fetch('https://news-et1s.onrender.com/api/matches', { timeout: 5000 });
     if (response.ok) {
       const rawData = await response.json();
@@ -54,14 +54,5 @@ export default async function handler(req, res) {
     console.error('Error:', e.message);
   }
 
-  // فقط دفعه اول که Redis کاملاً خالیه
-  return res.json([{
-    id: '1',
-    title: 'مسابقه تست AJ SPORTS',
-    time: '۲۱:۰۰',
-    status: 'upcoming',
-    poster: 'https://via.placeholder.com/400x225?text=AJ+SPORTS',
-    stream: null,
-    match_id: null
-  }]);
-                      }
+  return res.json([]);
+}
