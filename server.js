@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
+import { Readable } from 'stream';
 
 const app = express();
 
@@ -282,6 +283,53 @@ app.post('/api/admin/stream-control', adminAuth, async (req, res) => {
   });
 });
 
+// 📡 پروکسی استریم M3U8 / TS — دور زدن CORS و محدودیت‌های IP
+app.get('/api/stream-proxy', async (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl) {
+    return res.status(400).json({ error: 'Missing url param' });
+  }
+
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://ajsportstv.netlify.app',
+        'Referer': 'https://ajsportstv.netlify.app/'
+      },
+      redirect: 'follow'
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: 'Upstream error' });
+    }
+
+    // هدرهای مناسب برای M3U8 و TS
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=5');
+    
+    // انتقال بدنه به صورت stream
+    if (response.body) {
+      const readable = Readable.from(response.body);
+      readable.pipe(res);
+      readable.on('error', (err) => {
+        console.error('Stream error:', err.message);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Stream failed' });
+        }
+      });
+    } else {
+      const buffer = await response.buffer();
+      res.send(buffer);
+    }
+  } catch (e) {
+    console.error('Stream proxy error:', e.message);
+    res.status(502).json({ error: 'Proxy failed' });
+  }
+});
+
 // صفحه اصلی API
 app.get('/api', (req, res) => {
   const cacheSize = memoryCache.size;
@@ -299,7 +347,8 @@ app.get('/api', (req, res) => {
       chat: '/api/chat/send',
       chatEvents: '/api/chat/events',
       football: '/api/football/:action',
-      admin: '/api/admin/matches'
+      admin: '/api/admin/matches',
+      streamProxy: '/api/stream-proxy?url=...'
     }
   });
 });
